@@ -2,9 +2,8 @@
  * Optional adapter-side island SSR.
  *
  * Framework plugins may supply `renderIsland` to replace island inner HTML at
- * transform time. The hook receives the original slot HTML so adapters can pass
- * children into their SSR runtime. This helper stays framework-neutral and does
- * not import a framework SSR runtime.
+ * transform time. The hook receives slot HTML with nested islands already
+ * rendered so adapters can pass children into their SSR runtime.
  */
 
 export type RenderIslandFn = (
@@ -23,22 +22,32 @@ export async function applyIslandSsrHtml(
   filePath: string,
   names?: Iterable<string>,
 ): Promise<string> {
-  const allowed = names ? new Set(names) : null;
-  const islands = findIslandRanges(html);
+  return renderIslands(html, renderIsland, filePath, names ? new Set(names) : null);
+}
+
+async function renderIslands(
+  html: string,
+  renderIsland: RenderIslandFn,
+  filePath: string,
+  allowed: ReadonlySet<string> | null,
+): Promise<string> {
+  const islands = findIslandRanges(html, allowed);
   let output = html;
 
   for (const island of islands.toReversed()) {
-    if (allowed && !allowed.has(island.name)) {
-      continue;
-    }
-    const inner = output.slice(island.innerStart, island.closeStart);
+    const inner = html.slice(island.innerStart, island.closeStart);
     const scriptMatch = inner.match(PAYLOAD_SCRIPT);
     const script = scriptMatch?.[0] ?? "";
-    const slotHtml = inner.slice(script.length);
+    const slotHtml = await renderIslands(
+      inner.slice(script.length),
+      renderIsland,
+      filePath,
+      allowed,
+    );
     const props = parseIslandProps(island.propsAttr, script);
     const ssrHtml = await renderIsland(island.name, props, filePath, slotHtml);
     const openTag = markIslandServerRendered(
-      output.slice(island.openStart, island.openEnd),
+      html.slice(island.openStart, island.openEnd),
       slotHtml,
     );
     output =
@@ -61,14 +70,14 @@ interface IslandRange {
   propsAttr?: string;
 }
 
-function findIslandRanges(html: string): IslandRange[] {
+function findIslandRanges(html: string, allowed: ReadonlySet<string> | null): IslandRange[] {
   const ranges: IslandRange[] = [];
   const openRe = /<(div|span)\b([^>]*\bdata-ox-island="([^"]+)"[^>]*)>/gi;
   let match: RegExpExecArray | null;
   while ((match = openRe.exec(html)) !== null) {
     const tag = match[1];
     const name = decodeHtmlAttr(match[3] ?? "");
-    if (!tag || !name) continue;
+    if (!tag || !name || (allowed && !allowed.has(name))) continue;
     const innerStart = match.index + match[0].length;
     const closeStart = findMatchingClose(html, innerStart, tag);
     ranges.push({
@@ -79,6 +88,8 @@ function findIslandRanges(html: string): IslandRange[] {
       closeStart,
       propsAttr: matchAttr(match[2] ?? "", "data-ox-props"),
     });
+    // The slot is scanned recursively before rendering this island.
+    openRe.lastIndex = closeStart;
   }
   return ranges;
 }
