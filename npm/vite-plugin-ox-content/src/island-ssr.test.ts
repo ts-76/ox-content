@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vite-plus/test";
-import { applyIslandSsrHtml } from "./island-ssr";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { applyIslandSsrHtml, type RenderIslandFn } from "./island-ssr";
 
 describe("applyIslandSsrHtml", () => {
   it("injects adapter HTML without importing a framework SSR package", async () => {
@@ -28,4 +28,25 @@ describe("applyIslandSsrHtml", () => {
     expect(rendered).not.toContain("react-dom/server");
     expect(rendered).not.toContain("solid-js/web");
   });
+
+  it.each([
+    ["longer", "<b>The inner island has rendered a longer replacement for its original slot.</b>"],
+    ["empty", ""],
+  ])(
+    "passes a complete nested slot to the outer renderer when inner SSR is %s",
+    async (_, innerSsr) => {
+      const innerSlot = "This is the original slot content of the inner island.";
+      const innerAttrs = `data-ox-island="Inner" data-ox-content='${innerSlot}'`;
+      const html = `<div data-ox-island="Outer"><div ${innerAttrs}>${innerSlot}</div></div><p>after</p>`;
+      const expectedSlot = `<div ${innerAttrs} data-ox-ssr="true">${innerSsr}</div>`;
+      const renderIsland = vi.fn<RenderIslandFn>((name, _props, _filePath, slotHtml) =>
+        name === "Inner" ? innerSsr : `<section>${slotHtml}</section>`,
+      );
+
+      const rendered = await applyIslandSsrHtml(html, renderIsland, "a.md");
+
+      expect.soft(renderIsland).toHaveBeenCalledWith("Outer", {}, "a.md", expectedSlot);
+      expect(rendered).toContain(`><section>${expectedSlot}</section></div><p>after</p>`);
+    },
+  );
 });
