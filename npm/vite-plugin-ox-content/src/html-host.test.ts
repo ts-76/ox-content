@@ -1,3 +1,4 @@
+import { defaultTreeAdapter, parseFragment } from "parse5";
 import { describe, expect, it } from "vite-plus/test";
 import {
   HtmlHostRenderError,
@@ -55,6 +56,58 @@ describe("framework-neutral HTML host contract", () => {
     expect(result.html).toContain("data-ox-content='&lt;p&gt;slot&lt;/p&gt;'");
     expect(result.html).toContain(
       '<strong data-component="Chart">chart-component:Revenue:<p>slot</p></strong>',
+    );
+  });
+
+  it("keeps nested client module metadata in the slot saved for hydration", async () => {
+    const result = await renderHtmlHost({
+      html: '<div data-ox-island="Outer"><span data-ox-island="Inner"></span></div>',
+      documentPath: "/repo/docs/report.mdx",
+      root: "/repo",
+      srcDir: "docs",
+      components: { Outer: "./src/Outer.ts" },
+      imports: [
+        {
+          source: "./Inner.ts",
+          specifiers: [{ imported: "Counter", local: "Inner", kind: "named" }],
+        },
+      ],
+      resolveClientModule: (module) => `/assets/${module.name}.js`,
+      loadModule: async () => ({ default: "outer", Counter: "inner" }),
+      renderComponent: (component, _props, slotHtml) =>
+        component === "outer" ? `<section>${slotHtml}</section>` : "<b>Inner SSR</b>",
+    });
+
+    expect(result.diagnostics).toEqual([]);
+    const outer = parseFragment(result.html).childNodes.find((node) =>
+      defaultTreeAdapter.isElementNode(node),
+    );
+    const slot = outer?.attrs.find((attr) => attr.name === "data-ox-content")?.value;
+    const inner = parseFragment(slot ?? "").childNodes.find((node) =>
+      defaultTreeAdapter.isElementNode(node),
+    );
+    expect(inner?.attrs).toEqual(
+      expect.arrayContaining([
+        { name: "data-ox-island", value: "Inner" },
+        { name: "data-ox-module", value: "/assets/Inner.js" },
+        { name: "data-ox-export", value: "Counter" },
+      ]),
+    );
+    expect(outer?.attrs).toContainEqual({ name: "data-ox-module", value: "/assets/Outer.js" });
+  });
+
+  it("adds client module metadata to island wrappers returned by the renderer", async () => {
+    const result = await renderHtmlHost({
+      html: '<div data-ox-island="Badge"></div>',
+      documentPath: "/repo/docs/report.mdx",
+      components: { Badge: "./src/Badge.ts" },
+      resolveClientModule: () => "/assets/Badge.js",
+      loadModule: async () => ({ default: "badge" }),
+      renderComponent: () => '<span data-ox-island="Badge">Badge SSR</span>',
+    });
+
+    expect(result.html).toContain(
+      '<span data-ox-island="Badge" data-ox-module="/assets/Badge.js" data-ox-export="default">Badge SSR</span>',
     );
   });
 

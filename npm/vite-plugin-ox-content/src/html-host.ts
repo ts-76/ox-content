@@ -122,7 +122,8 @@ export async function renderHtmlHost(input: RenderHtmlHostInput): Promise<Render
   let nextIslandOrder = 0;
 
   const html = await applyIslandSsrHtml(
-    input.html,
+    // Nested wrappers need their client metadata before SSR saves the parent slot.
+    markClientModules(input.html, modules),
     async (name, props, _filePath, slotHtml) => {
       const order = -nextIslandOrder;
       nextIslandOrder += 1;
@@ -172,6 +173,7 @@ export async function renderHtmlHost(input: RenderHtmlHostInput): Promise<Render
   const headContributions = dedupeHeadContributions(headResults);
 
   return {
+    // Renderers can also emit island wrappers.
     html: markClientModules(html, modules),
     headHtml: headContributions.map((contribution) => contribution.html).join("\n"),
     headContributions,
