@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { test } from "vite-plus/test";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseHTML } from "linkedom";
 import { resolveConfig } from "vite";
@@ -85,30 +85,52 @@ test("compiled Markdown renders nested slots and retains JSON prototype keys", a
       join(directory, "Outer.mjs"),
       'import { jsx } from "hono/jsx"; export default ({ children }) => jsx("article", null, children);',
     );
-    await writeFile(join(directory, "Inner.mjs"), 'export default () => "Nested SSR";');
+    await writeFile(
+      join(directory, "Inner.mjs"),
+      `import { jsx } from "hono/jsx";
+      let renders = 0;
+      export function Counter() {
+        return jsx("b", { "data-render": ++renders, "data-label": "Tom & Jerry's" }, "Nested SSR");
+      }`,
+    );
+    await writeFile(join(directory, "Sibling.mjs"), 'export default () => "Sibling SSR";');
     const { code, parsed } = await compileHonoDocument({
       source: [
         "---",
         "metadata: { __proto__: { named: true } }",
         "---",
         'import Outer from "./Outer.mjs";',
-        'import Inner from "./Inner.mjs";',
+        'import Middle from "./Outer.mjs";',
+        'import { Counter as Inner } from "./Inner.mjs";',
+        'import Sibling from "./Sibling.mjs";',
         "",
         "<Outer>",
         "",
         "Before",
         "",
+        "<Middle>",
+        "",
         "<Inner />",
+        "",
+        "</Middle>",
         "",
         "After",
         "",
         "</Outer>",
+        "",
+        "<Sibling />",
       ].join("\n"),
       documentPath: join(directory, "nested.mdx"),
       root: directory,
       oxContent: { ...options, srcDir: "." },
       selectFrontmatter: () => JSON.parse('{"__proto__":{"selected":true}}'),
     });
+    assert.deepEqual(
+      [...code.matchAll(/^import \* as m\d+ from (".+");$/gm)].map(([, id]) =>
+        basename(JSON.parse(id)),
+      ),
+      ["Inner.mjs", "Outer.mjs", "Sibling.mjs"],
+    );
     const modulePath = join(directory, "compiled.mjs");
     await writeFile(modulePath, code);
     const { default: Markdown, frontmatter } = await import(pathToFileURL(modulePath).href);
@@ -118,16 +140,28 @@ test("compiled Markdown renders nested slots and retains JSON prototype keys", a
     const html = (await Markdown()).toString();
     const { document } = parseHTML(html);
     const outer = document.querySelector('[data-ox-island="Outer"]');
-    const inner = outer.querySelector('article [data-ox-island="Inner"]');
+    const middle = outer.querySelector('article [data-ox-island="Middle"]');
+    const inner = middle.querySelector('article [data-ox-island="Inner"]');
     assert.equal(outer.dataset.oxModule, "/Outer.mjs");
-    assert.equal(inner.dataset.oxModule, "/Inner.mjs");
     assert.match(inner.textContent, /^Nested SSR/);
     assert.match(outer.querySelector("article").textContent, /Before[\s\S]*After/);
     const context = JSON.parse(inner.querySelector("[data-ox-hono-context]").textContent);
     assert.equal(Object.hasOwn(context.frontmatter, "__proto__"), true);
     assert.deepEqual(context.frontmatter.__proto__, { selected: true });
     const slot = parseHTML(outer.dataset.oxContent).document;
-    assert.equal(slot.querySelector('[data-ox-island="Inner"]').dataset.oxModule, "/Inner.mjs");
+    const savedMiddle = slot.querySelector('[data-ox-island="Middle"]');
+    const savedMiddleSlot = parseHTML(savedMiddle.dataset.oxContent).document;
+    for (const copy of [
+      inner,
+      savedMiddle.querySelector('[data-ox-island="Inner"]'),
+      savedMiddleSlot.querySelector('[data-ox-island="Inner"]'),
+    ]) {
+      assert.equal(copy.dataset.oxModule, "/Inner.mjs");
+      assert.equal(copy.dataset.oxExport, "Counter");
+      assert.equal(copy.querySelector("b").dataset.label, "Tom & Jerry's");
+      assert.equal(copy.querySelector("b").dataset.render, "1");
+    }
+    assert.match((await Markdown()).toString(), /data-render="2"/);
     assert.doesNotMatch(html, /ox-hono-[a-f0-9]{64}-(?:island|slot|fragment)/);
   } finally {
     await rm(directory, { recursive: true, force: true });
