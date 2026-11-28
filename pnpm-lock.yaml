@@ -2257,9 +2257,6 @@ importers:
       '@ox-content/islands':
         specifier: workspace:*
         version: link:../ox-content-islands
-      parse5:
-        specifier: ^7.3.0
-        version: 7.3.0
     devDependencies:
       '@ox-content/napi':
         specifier: workspace:*

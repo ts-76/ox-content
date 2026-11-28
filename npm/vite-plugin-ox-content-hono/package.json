@@ -52,8 +52,7 @@
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
-    "@ox-content/islands": "workspace:*",
-    "parse5": "^7.3.0"
+    "@ox-content/islands": "workspace:*"
   },
   "devDependencies": {
     "@ox-content/napi": "workspace:*",
